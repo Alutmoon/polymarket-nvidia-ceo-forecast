@@ -41,11 +41,12 @@
 //
 // Practice backtest (independently recomputed pinball loss, cases p00-p04):
 //   baseline 0.392518, v1 (no sum correction) 0.306365, v2 (sum correction)
-//   0.294022, this entry 0.292643 (p00 0.419 vs 0.536, p01 0.306 vs 0.380,
-//   p02 0.327 vs 0.408, p03 0.249 vs 0.369, p04 0.197 vs 0.299).
+//   0.294022, v3 (symmetric reshape) 0.292643, this entry 0.287335
+//   (p00 0.400 vs 0.536, p01 0.301 vs 0.380, p02 0.327 vs 0.408,
+//   p03 0.248 vs 0.369, p04 0.194 vs 0.299), winning all 5 cases.
 //   Median error 0.8475, 90% coverage 0.888. Official dev-phase scores:
 //   v1 loss 0.271218, rank 1110 of 2766; v2 loss 0.261401, rank 547 of
-//   2796, both prize-eligible.
+//   2796; v3 loss 0.259845, rank 505 of 2815, all prize-eligible.
 //
 // I/O contract (same as the kit's starter): read every <id>.in in the input
 // directory ($MAKEFUN_INPUT_DIR, else /input), write <id>.out to the output
@@ -62,13 +63,16 @@ const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 /** The quantile levels the contest scores, in the order each row lists them. */
 const QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95];
 /**
- * The standard normal's quantile at each level, reshaped for the realised
- * distribution of price moves: outer quantiles widened x1.2 (jumps are
- * fatter-tailed than normal), inner quantiles narrowed x0.8 (most minutes
- * barely move, so the centre is tighter than normal). Widening the outer
- * quantiles alone hurt; the pair together wins on 4 of 5 practice cases.
+ * The standard normal's quantile at each level, calibrated per level on the
+ * practice cases (each level's spread multiplier chosen to minimise that
+ * level's own pooled pinball loss, coarse 0.1 grid): q05 x1.0, q25 x1.1,
+ * q75 x0.6, q95 x1.2. The asymmetry is real and consistent: realised moves
+ * are left-skewed around the last price (prices fall further than they
+ * rise, the book's sum reverting down from above 1), so the lower inner
+ * quantile sits further below the median than the upper inner quantile
+ * sits above it. This wins on all 5 scored practice cases.
  */
-const Z = [-1.644854 * 1.2, -0.67449 * 0.8, 0, 0.67449 * 0.8, 1.644854 * 1.2];
+const Z = [-1.644854 * 1.0, -0.67449 * 1.1, 0, 0.67449 * 0.6, 1.644854 * 1.2];
 
 /** Half-life (minutes) of the recency weights on 1-minute price changes. */
 const EWMA_HALF_LIFE = 90;
