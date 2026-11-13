@@ -3,7 +3,9 @@
 // Model: persistence median with a per-market, recency-weighted spread that
 // grows sub-diffusively with horizon.
 //
-//   q_tau(h) = clamp(x + z_tau * sigma * h^0.4, 0, 1), rounded to 6 decimals
+//   q_tau(h) = clamp(x * f(h) + z_tau * sigma * h^0.4 * f(h), 0, 1),
+//   rounded to 6 decimals, with f(h) = 1 - (S - 1) * h / 240 and S the sum
+//   of the case's last prices (see the sum-correction note below).
 //
 // where x is the market's last price, z_tau the standard normal quantile at
 // each scored level, and sigma is that market's own realised 1-minute
@@ -22,18 +24,27 @@
 //     a random walk with the 1-minute volatility implies (1-minute
 //     autocorrelations run about -0.07 to -0.10, i.e. mild mean reversion /
 //     bid-ask bounce), so variance grows slower than linearly in h.
-//   - No drift: short-term trends (last-hour / last-6-hour drift, reversion
-//     toward trailing means) did not improve the practice loss, so the
-//     median stays at the last price.
+//   - No plain drift: short-term trends (last-hour / last-6-hour drift,
+//     momentum, reversion toward trailing means) did not improve the
+//     practice loss, so the only median movement is the sum correction.
 //   - No fatter tails: widening the outer quantiles hurt; the per-market
 //     sigma already widens the bands where jumps are frequent.
-//   - No cross-market sum adjustment: the 24 Yes prices already sum to
-//     about 1 at each checkpoint, so the medians need no correction.
+//   - Cross-market sum correction: the 24 Yes prices should sum to 1 (one
+//     winner), but at a checkpoint they sum to S = 0.81..1.09. The book
+//     reverts toward sum 1 over the 4-hour horizon, so each market's median
+//     (and spread) is scaled by f(h) = 1 - (S - 1) * h / 240: when the book
+//     is overpriced (S > 1) medians shrink toward 0, when underpriced
+//     (S < 1) they grow. This wins on 4 of the 5 scored practice cases and
+//     ties the fifth, and it is the one median effect the practice data
+//     supports: plain drift, momentum, reversion to trailing means, and
+//     polarisation toward 0/1 were all tested and all made it worse.
 //
 // Practice backtest (independently recomputed pinball loss, cases p00-p04):
-//   baseline 0.392518, this entry 0.306365 (-22%), wins all 5 cases
-//   (p00 0.466 vs 0.536, p01 0.307 vs 0.380, p02 0.342 vs 0.408,
-//   p03 0.254 vs 0.369, p04 0.200 vs 0.299). 90% coverage 0.888.
+//   baseline 0.392518, v1 (no sum correction) 0.306365, this entry 0.294022
+//   (p00 0.416 vs 0.536, p01 0.308 vs 0.380, p02 0.332 vs 0.408,
+//   p03 0.251 vs 0.369, p04 0.198 vs 0.299). Median error 0.8475,
+//   90% coverage 0.888. Official dev-phase score of v1: loss 0.271218,
+//   rank 1110 of 2766, prize-eligible.
 //
 // I/O contract (same as the kit's starter): read every <id>.in in the input
 // directory ($MAKEFUN_INPUT_DIR, else /input), write <id>.out to the output
@@ -101,15 +112,22 @@ function sigmaOf(prices: number[]): number {
   return Math.min(SIGMA_CAP, Math.max(SIGMA_FLOOR, sigma));
 }
 
-/** The forecast of one market: horizon rows of the five quantiles. */
-function forecast(m: CaseMarket, horizon: number): number[][] {
+/**
+ * The forecast of one market: horizon rows of the five quantiles.
+ * sumS is the sum of every market's last price in this case (the book
+ * should sum to 1); the median and spread scale by f(h) = 1 - (sumS - 1) *
+ * h / horizon, so the book reverts toward sum 1 linearly over the horizon.
+ */
+function forecast(m: CaseMarket, horizon: number, sumS: number): number[][] {
   if (m.prices.length === 0) throw new Error(`market ${m.id} has no prices`);
   const x = m.prices[m.prices.length - 1] as number;
   const sigma = sigmaOf(m.prices);
   const rows: number[][] = [];
   for (let h = 1; h <= horizon; h++) {
-    const spread = sigma * Math.pow(h, GAMMA);
-    const row = Z.map((z) => price6(x + z * spread));
+    const f = 1 - (sumS - 1) * (h / horizon);
+    const med = price6(x * f);
+    const spread = sigma * Math.pow(h, GAMMA) * f;
+    const row = Z.map((z) => price6(med + z * spread));
     // Rounding/clamping cannot break monotonicity here (z is increasing),
     // but enforce it so the output is valid by construction.
     for (let j = 1; j < row.length; j++) {
@@ -127,6 +145,7 @@ for (const file of inputs) {
   const id = file.slice(0, -'.in'.length);
   const c = JSON.parse(readFileSync(join(INPUT_DIR, file), 'utf8')) as Case;
   if (c.quantiles.length !== QUANTILES.length || c.quantiles.some((t, j) => t !== QUANTILES[j])) throw new Error(`${file} asks for quantiles ${JSON.stringify(c.quantiles)}, not ${JSON.stringify(QUANTILES)}`);
-  const forecasts = c.markets.map((m) => ({ id: m.id, q: forecast(m, c.horizon_minutes) }));
+  const sumS = c.markets.reduce((s, m) => s + (m.prices.length ? (m.prices[m.prices.length - 1] as number) : 0), 0);
+  const forecasts = c.markets.map((m) => ({ id: m.id, q: forecast(m, c.horizon_minutes, sumS) }));
   writeFileSync(join(OUTPUT_DIR, `${id}.out`), `${JSON.stringify({ forecasts })}\n`);
 }
