@@ -40,11 +40,12 @@
 //     polarisation toward 0/1 were all tested and all made it worse.
 //
 // Practice backtest (independently recomputed pinball loss, cases p00-p04):
-//   baseline 0.392518, v1 (no sum correction) 0.306365, this entry 0.294022
-//   (p00 0.416 vs 0.536, p01 0.308 vs 0.380, p02 0.332 vs 0.408,
-//   p03 0.251 vs 0.369, p04 0.198 vs 0.299). Median error 0.8475,
-//   90% coverage 0.888. Official dev-phase score of v1: loss 0.271218,
-//   rank 1110 of 2766, prize-eligible.
+//   baseline 0.392518, v1 (no sum correction) 0.306365, v2 (sum correction)
+//   0.294022, this entry 0.292643 (p00 0.419 vs 0.536, p01 0.306 vs 0.380,
+//   p02 0.327 vs 0.408, p03 0.249 vs 0.369, p04 0.197 vs 0.299).
+//   Median error 0.8475, 90% coverage 0.888. Official dev-phase scores:
+//   v1 loss 0.271218, rank 1110 of 2766; v2 loss 0.261401, rank 547 of
+//   2796, both prize-eligible.
 //
 // I/O contract (same as the kit's starter): read every <id>.in in the input
 // directory ($MAKEFUN_INPUT_DIR, else /input), write <id>.out to the output
@@ -60,8 +61,14 @@ const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 /** The quantile levels the contest scores, in the order each row lists them. */
 const QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95];
-/** The standard normal's quantile at each level, to 6 decimals. */
-const Z = [-1.644854, -0.67449, 0, 0.67449, 1.644854];
+/**
+ * The standard normal's quantile at each level, reshaped for the realised
+ * distribution of price moves: outer quantiles widened x1.2 (jumps are
+ * fatter-tailed than normal), inner quantiles narrowed x0.8 (most minutes
+ * barely move, so the centre is tighter than normal). Widening the outer
+ * quantiles alone hurt; the pair together wins on 4 of 5 practice cases.
+ */
+const Z = [-1.644854 * 1.2, -0.67449 * 0.8, 0, 0.67449 * 0.8, 1.644854 * 1.2];
 
 /** Half-life (minutes) of the recency weights on 1-minute price changes. */
 const EWMA_HALF_LIFE = 90;
